@@ -23,7 +23,10 @@ def build_app(settings: Settings) -> MainWindow:
     repo = NullScanRepository()
 
     # Domain
-    scanner = DomainScanner(data_provider=data_provider)
+    scanner = DomainScanner(
+        data_provider=data_provider,
+        benchmark=settings.default_benchmark
+    )
 
     # Use cases
     scan_uc = ScanMarketUseCase(scanner=scanner, repo=repo)
