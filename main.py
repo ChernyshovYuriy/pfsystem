@@ -25,7 +25,8 @@ def build_app(settings: Settings) -> MainWindow:
     # Domain
     scanner = DomainScanner(
         data_provider=data_provider,
-        benchmark=settings.default_benchmark
+        benchmark=settings.default_benchmark,
+        enable_audit=False
     )
 
     # Use cases
