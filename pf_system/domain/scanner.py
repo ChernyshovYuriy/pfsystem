@@ -128,12 +128,34 @@ class DomainScanner:
                     score += 5.0 * liq
 
                 # --- Note (for UI tooltip / debugging) ---
-                note = self._note(r1m, r3m, r6m, sma50, sma200, rs3m, rs6m, dv20) + " | " + pf_res.note
+                # note = self._note(r1m, r3m, r6m, sma50, sma200, rs3m, rs6m, dv20) + " | " + pf_res.note
+
+                active_name = pf_res.signal.name if pf_res.signal else "none"
+                active_trigger = pf_res.signal.trigger if pf_res.signal else None
+
+                buy_trigger = pf_res.buy_sig.trigger if pf_res.buy_sig else None
+                sell_trigger = pf_res.sell_sig.trigger if pf_res.sell_sig else None
+
+                result = ScanResultRow(
+                        symbol=sym,
+                        regime=regime,
+                        score=score,
+                        pf_active_name=active_name,
+                        pf_active_trigger=active_trigger,
+                        pf_active_cs=pf_res.cols_since,
+                        pf_buy_trigger=buy_trigger,
+                        pf_buy_cs=pf_res.buy_cs,
+                        pf_sell_trigger=sell_trigger,
+                        pf_sell_cs=pf_res.sell_cs,
+                        pf_cur_type=pf_res.cur_type,
+                        pf_cur_low=pf_res.cur_low,
+                        pf_cur_high=pf_res.cur_high
+                    )
 
                 # For debugging only:
-                print(f"{sym}: regime={regime} score={score:.2f} note={note}")
+                print(f"{sym}: regime={regime} score={score:.2f} note={result}")
 
-                out.append(ScanResultRow(sym, regime, score, note))
+                out.append(result)
 
             except Exception as e:
                 out.append(ScanResultRow(sym, "ERROR", -9999.0, f"error: {e}"))

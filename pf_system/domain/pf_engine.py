@@ -11,10 +11,22 @@ from pf_system.domain.signals import PFSignal, last_double_top_buy, last_double_
 class PFRegimeResult:
     regime: str
     score: float
+
+    # Active signal chosen for the regime (or None)
     signal: Optional[PFSignal]
     cols_since: Optional[int]
+
+    # Most recent buy/sell signals (may be None)
+    buy_sig: Optional[PFSignal]
+    sell_sig: Optional[PFSignal]
     buy_cs: Optional[int]
     sell_cs: Optional[int]
+
+    # Current column snapshot
+    cur_type: str  # "X" or "O"
+    cur_low: float
+    cur_high: float
+
     note: str
 
 
@@ -25,7 +37,20 @@ def evaluate_pf(
         box_value: float,
 ) -> PFRegimeResult:
     if not chart.columns:
-        return PFRegimeResult("NEUTRAL", 0.0, None, None, None, None, "pf: empty")
+        return PFRegimeResult(
+            regime="NEUTRAL",
+            score=0.0,
+            signal=None,
+            cols_since=None,
+            buy_sig=None,
+            sell_sig=None,
+            buy_cs=None,
+            sell_cs=None,
+            cur_type="X",
+            cur_low=0.0,
+            cur_high=0.0,
+            note="pf: empty",
+        )
 
     buy = last_double_top_buy(chart)
     sell = last_double_bottom_sell(chart)
@@ -57,7 +82,25 @@ def evaluate_pf(
 
     note = _pf_note(chart, regime, sig, cols_since, last_price, buy, sell)
 
-    return PFRegimeResult(regime, score, sig, cols_since, buy_cs, sell_cs, note)
+    cur = chart.columns[-1]
+    cur_type = cur.col_type
+    cur_low = float(cur.low)
+    cur_high = float(cur.high)
+
+    return PFRegimeResult(
+        regime=regime,
+        score=score,
+        signal=sig,
+        cols_since=cols_since,
+        buy_sig=buy,
+        sell_sig=sell,
+        buy_cs=buy_cs,
+        sell_cs=sell_cs,
+        cur_type=cur_type,
+        cur_low=cur_low,
+        cur_high=cur_high,
+        note=note,
+    )
 
 
 def _pick_active_signal(chart: PFChart, buy: Optional[PFSignal], sell: Optional[PFSignal]) -> Optional[PFSignal]:

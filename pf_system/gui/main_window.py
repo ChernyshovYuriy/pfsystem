@@ -56,8 +56,8 @@ class ScanResultsTableModel(QAbstractTableModel):
                 return row.regime
             if col == 2:
                 return f"{row.score:.2f}"
-            if col == 3:
-                return row.note
+            # if col == 3:
+            #     return row.note
 
         if role == Qt.TextAlignmentRole and col == 2:
             return int(Qt.AlignRight | Qt.AlignVCenter)
