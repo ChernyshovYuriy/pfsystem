@@ -19,7 +19,18 @@ from pf_system.domain.models import ScanResultRow
 
 
 class ScanResultsTableModel(QAbstractTableModel):
-    HEADERS = ["Symbol", "Regime", "Score", "Note"]
+    HEADERS = [
+        "Symbol",
+        "Regime",
+        "Score",
+        "Active",
+        "CS",
+        "Trigger",
+        "Cur",
+        "Range",
+        "Buy CS",
+        "Sell CS",
+    ]
 
     def __init__(self) -> None:
         super().__init__()
@@ -27,7 +38,8 @@ class ScanResultsTableModel(QAbstractTableModel):
 
     def set_rows(self, rows: list[ScanResultRow]) -> None:
         self.beginResetModel()
-        self._rows = rows
+        # Default sort: highest score first
+        self._rows = sorted(rows, key=lambda r: r.score, reverse=True)
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -56,11 +68,26 @@ class ScanResultsTableModel(QAbstractTableModel):
                 return row.regime
             if col == 2:
                 return f"{row.score:.2f}"
-            # if col == 3:
-            #     return row.note
+            if col == 3:
+                return row.pf_active_name
+            if col == 4:
+                return "" if row.pf_active_cs is None else str(row.pf_active_cs)
+            if col == 5:
+                return "" if row.pf_active_trigger is None else f"{row.pf_active_trigger:.2f}"
+            if col == 6:
+                return row.pf_cur_type
+            if col == 7:
+                return f"{row.pf_cur_low:.2f} → {row.pf_cur_high:.2f}"
+            if col == 8:
+                return "" if row.pf_buy_cs is None else str(row.pf_buy_cs)
+            if col == 9:
+                return "" if row.pf_sell_cs is None else str(row.pf_sell_cs)
 
-        if role == Qt.TextAlignmentRole and col == 2:
-            return int(Qt.AlignRight | Qt.AlignVCenter)
+        if role == Qt.TextAlignmentRole:
+            # right align numeric-ish columns
+            if col in (2, 4, 5, 8, 9):
+                return int(Qt.AlignRight | Qt.AlignVCenter)
+            return int(Qt.AlignLeft | Qt.AlignVCenter)
 
         return None
 
@@ -124,8 +151,27 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._table, 1)
         layout.addWidget(self._status)
 
+        self._details = QLabel("Select a row to see details.")
+        layout.addWidget(self._details)
+        self._table.selectionModel().selectionChanged.connect(self._on_row_selected)
+
         # Default symbols so it runs instantly
         self._symbols.setText("XIU.TO, CNQ.TO, SU.TO, SHOP.TO, BNS.TO, AEM.TO, WCN.TO, ATD.TO, TRI.TO")
+
+    def _on_row_selected(self, selected, _deselected) -> None:
+        if not selected.indexes():
+            self._details.setText("Select a row to see details.")
+            return
+
+        idx = selected.indexes()[0]
+        row = self._table_model._rows[idx.row()]
+
+        self._details.setText(
+            f"{row.symbol} | {row.regime} | score={row.score:.2f} | "
+            f"active={row.pf_active_name}@{'' if row.pf_active_trigger is None else f'{row.pf_active_trigger:.2f}'} "
+            f"(cs={row.pf_active_cs}) | cur={row.pf_cur_type} {row.pf_cur_low:.2f}->{row.pf_cur_high:.2f} | "
+            f"buy_cs={row.pf_buy_cs} sell_cs={row.pf_sell_cs}"
+        )
 
     def _on_scan(self) -> None:
         symbols = [s.strip() for s in self._symbols.text().split(",") if s.strip()]

@@ -30,11 +30,8 @@ class DomainScanner:
     def scan(self, symbols: Sequence[str], lookback_days: int) -> List[ScanResultRow]:
         out: List[ScanResultRow] = []
 
-        # Fetch benchmark once (for RS). We only need closes.
         bench_series = self._safe_fetch_series(self._benchmark, lookback_days)
         bench_closes: Optional[List[float]] = bench_series[0] if bench_series else None
-
-        # If benchmark fails, we still scan; RS becomes None.
         if bench_closes is not None and len(bench_closes) < 130:
             bench_closes = None
 
@@ -42,12 +39,12 @@ class DomainScanner:
             try:
                 series = self._safe_fetch_series(sym, lookback_days)
                 if series is None:
-                    out.append(ScanResultRow(sym, "ERROR", -9999.0, "insufficient data"))
+                    out.append(self._error_row(sym, "insufficient data"))
                     continue
 
                 closes, vols = series
                 if len(closes) < 210:
-                    out.append(ScanResultRow(sym, "ERROR", -9999.0, "insufficient data"))
+                    out.append(self._error_row(sym, "insufficient data"))
                     continue
 
                 last = float(closes[-1])
@@ -65,47 +62,37 @@ class DomainScanner:
                     box_value=0.015,
                 )
 
-                # Optional audit: uses the SAME closes (no refetch).
                 if self._enable_audit:
                     self._audit_symbol(sym, closes, lookback_days, bench_closes)
 
                 # --- Returns ---
-                r1m = self._return_over(closes, 21)
                 r3m = self._return_over(closes, 63)
                 r6m = self._return_over(closes, 126)
 
                 # --- Trend (SMA) ---
-                sma50 = float(self._sma(closes, 50))
                 sma200 = float(self._sma(closes, 200))
 
                 # --- Relative strength vs benchmark (return differential) ---
-                rs3m: Optional[float] = None
                 rs6m: Optional[float] = None
-                if bench_closes is not None:
-                    if len(bench_closes) >= 64 and len(closes) >= 64:
-                        br3m = self._return_over(bench_closes, 63)
-                        rs3m = r3m - br3m
-                    if len(bench_closes) >= 127 and len(closes) >= 127:
-                        br6m = self._return_over(bench_closes, 126)
-                        rs6m = r6m - br6m
+                if bench_closes is not None and len(bench_closes) >= 127 and len(closes) >= 127:
+                    br6m = self._return_over(bench_closes, 126)
+                    rs6m = r6m - br6m
 
                 # --- Liquidity ---
                 dv20 = float(self._avg_dollar_vol(closes, vols, 20))
                 liq = float(self._liquidity_score(dv20))
 
                 # --- Option B: start from PF regime/score ---
-                regime = pf_res.regime
-                score = float(pf_res.score)
+                regime = getattr(pf_res, "regime", "NEUTRAL")
+                score = float(getattr(pf_res, "score", 0.0))
 
-                # --- Context multipliers (apply BEFORE liquidity add-on) ---
+                # --- Context multipliers ---
                 mult = 1.0
-
                 if regime == "BULLISH":
                     if rs6m is not None and rs6m < 0:
                         mult *= 0.6
                     if last <= sma200:
                         mult *= 0.5
-
                 elif regime == "BEARISH":
                     if rs6m is not None and rs6m > 0:
                         mult *= 0.7
@@ -114,7 +101,7 @@ class DomainScanner:
 
                 score *= mult
 
-                # --- Whipsaw damping (apply ONCE, before liquidity) ---
+                # --- Whipsaw damping ---
                 sell_cs = getattr(pf_res, "sell_cs", None)
                 buy_cs = getattr(pf_res, "buy_cs", None)
 
@@ -123,42 +110,55 @@ class DomainScanner:
                 if regime == "BEARISH" and isinstance(buy_cs, int) and buy_cs <= 2:
                     score *= 0.75
 
-                # --- Liquidity add-on last (signal-driven only) ---
+                # --- Liquidity add-on last ---
                 if regime != "NEUTRAL":
                     score += 5.0 * liq
 
-                # --- Note (for UI tooltip / debugging) ---
-                # note = self._note(r1m, r3m, r6m, sma50, sma200, rs3m, rs6m, dv20) + " | " + pf_res.note
+                # --- PF summary fields (safe) ---
+                signal = getattr(pf_res, "signal", None)
+                active_name = getattr(signal, "name", "none") if signal else "none"
+                active_trigger = getattr(signal, "trigger", None) if signal else None
+                active_cs = getattr(pf_res, "cols_since", None)
 
-                active_name = pf_res.signal.name if pf_res.signal else "none"
-                active_trigger = pf_res.signal.trigger if pf_res.signal else None
+                buy_sig = getattr(pf_res, "buy_sig", None)
+                sell_sig = getattr(pf_res, "sell_sig", None)
+                buy_trigger = getattr(buy_sig, "trigger", None) if buy_sig else None
+                sell_trigger = getattr(sell_sig, "trigger", None) if sell_sig else None
 
-                buy_trigger = pf_res.buy_sig.trigger if pf_res.buy_sig else None
-                sell_trigger = pf_res.sell_sig.trigger if pf_res.sell_sig else None
+                cur_type = getattr(pf_res, "cur_type", "?")
+                cur_low = float(getattr(pf_res, "cur_low", 0.0))
+                cur_high = float(getattr(pf_res, "cur_high", 0.0))
+
+                # Optional UX: hide “active” in NEUTRAL
+                if regime == "NEUTRAL":
+                    active_name = "none"
+                    active_trigger = None
+                    active_cs = None
 
                 result = ScanResultRow(
-                        symbol=sym,
-                        regime=regime,
-                        score=score,
-                        pf_active_name=active_name,
-                        pf_active_trigger=active_trigger,
-                        pf_active_cs=pf_res.cols_since,
-                        pf_buy_trigger=buy_trigger,
-                        pf_buy_cs=pf_res.buy_cs,
-                        pf_sell_trigger=sell_trigger,
-                        pf_sell_cs=pf_res.sell_cs,
-                        pf_cur_type=pf_res.cur_type,
-                        pf_cur_low=pf_res.cur_low,
-                        pf_cur_high=pf_res.cur_high
-                    )
+                    symbol=sym,
+                    regime=regime,
+                    score=float(score),
 
-                # For debugging only:
-                print(f"{sym}: regime={regime} score={score:.2f} note={result}")
+                    pf_active_name=active_name,
+                    pf_active_trigger=active_trigger,
+                    pf_active_cs=active_cs,
 
+                    pf_buy_trigger=buy_trigger,
+                    pf_buy_cs=buy_cs if isinstance(buy_cs, int) else None,
+                    pf_sell_trigger=sell_trigger,
+                    pf_sell_cs=sell_cs if isinstance(sell_cs, int) else None,
+
+                    pf_cur_type=str(cur_type),
+                    pf_cur_low=cur_low,
+                    pf_cur_high=cur_high,
+                )
+
+                print(f"{sym}: regime={regime} score={score:.2f} row={result}")
                 out.append(result)
 
             except Exception as e:
-                out.append(ScanResultRow(sym, "ERROR", -9999.0, f"error: {e}"))
+                out.append(self._error_row(sym, f"error: {e}"))
 
         out.sort(key=lambda r: r.score, reverse=True)
         return out
@@ -406,4 +406,21 @@ class DomainScanner:
             f"SMA50={sma50:.2f} SMA200={sma200:.2f} "
             f"RS3M={pct(rs3m)} RS6M={pct(rs6m)} "
             f"DV20={dv(dv20)}"
+        )
+
+    def _error_row(self, sym: str, msg: str) -> ScanResultRow:
+        return ScanResultRow(
+            symbol=sym,
+            regime="ERROR",
+            score=-9999.0,
+            pf_active_name="none",
+            pf_active_trigger=None,
+            pf_active_cs=None,
+            pf_buy_trigger=None,
+            pf_buy_cs=None,
+            pf_sell_trigger=None,
+            pf_sell_cs=None,
+            pf_cur_type="?",
+            pf_cur_low=0.0,
+            pf_cur_high=0.0,
         )
