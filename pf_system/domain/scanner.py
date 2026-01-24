@@ -14,8 +14,6 @@ class DomainScanner:
     """
     Domain service.
 
-    V1 regime/score: momentum + trend + relative strength vs benchmark + liquidity score.
-    P&F is built in audit mode only (for validation) and will later become the primary driver.
     """
 
     def __init__(
@@ -116,9 +114,9 @@ class DomainScanner:
 
                 score *= mult
 
-                # --- Optional whipsaw damping (only if pf_engine exposes buy_cs/sell_cs) ---
-                buy_cs = getattr(pf_res, "buy_cs", None)
+                # --- Whipsaw damping (apply ONCE, before liquidity) ---
                 sell_cs = getattr(pf_res, "sell_cs", None)
+                buy_cs = getattr(pf_res, "buy_cs", None)
 
                 if regime == "BULLISH" and isinstance(sell_cs, int) and sell_cs <= 2:
                     score *= 0.75
@@ -128,12 +126,6 @@ class DomainScanner:
                 # --- Liquidity add-on last (signal-driven only) ---
                 if regime != "NEUTRAL":
                     score += 5.0 * liq
-
-                if regime == "BULLISH" and pf_res.sell_cs is not None and pf_res.sell_cs <= 2:
-                    score *= 0.75
-
-                if regime == "BEARISH" and pf_res.buy_cs is not None and pf_res.buy_cs <= 2:
-                    score *= 0.75
 
                 # --- Note (for UI tooltip / debugging) ---
                 note = self._note(r1m, r3m, r6m, sma50, sma200, rs3m, rs6m, dv20) + " | " + pf_res.note
