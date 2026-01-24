@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 import math
-from typing import List, Sequence, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from pf_system.domain.models import ScanResultRow
 from pf_system.domain.pf_engine import evaluate_pf
-from pf_system.domain.pf_verify import verify_pf_chart, summarize_pf
+from pf_system.domain.pf_verify import summarize_pf, verify_pf_chart
 from pf_system.domain.point_and_figure import build_pf_from_closes
 from pf_system.ports.data_provider import MarketDataProvider
 
 
-class DomainScanner:
-    """
-    Domain service.
+def _safe_signal_trigger(sig) -> Optional[float]:
+    if sig is None:
+        return None
+    trig = getattr(sig, "trigger", None)
+    return float(trig) if isinstance(trig, (int, float)) else None
 
-    """
+
+def _safe_cols_since(value) -> Optional[int]:
+    return int(value) if isinstance(value, int) else None
+
+
+class DomainScanner:
+    """Domain service orchestrating data fetch, P&F evaluation, and scoring."""
 
     def __init__(
             self,
@@ -30,138 +38,164 @@ class DomainScanner:
     def scan(self, symbols: Sequence[str], lookback_days: int) -> List[ScanResultRow]:
         out: List[ScanResultRow] = []
 
-        bench_series = self._safe_fetch_series(self._benchmark, lookback_days)
-        bench_closes: Optional[List[float]] = bench_series[0] if bench_series else None
-        if bench_closes is not None and len(bench_closes) < 130:
-            bench_closes = None
+        bench_closes = self._try_get_benchmark_closes(lookback_days)
 
         for sym in symbols:
             try:
-                series = self._safe_fetch_series(sym, lookback_days)
-                if series is None:
-                    out.append(self._error_row(sym, "insufficient data"))
-                    continue
-
-                closes, vols = series
-                if len(closes) < 210:
-                    out.append(self._error_row(sym, "insufficient data"))
-                    continue
-
-                last = float(closes[-1])
-
-                # --- P&F evaluation (Option B driver) ---
-                pf_chart = build_pf_from_closes(
-                    closes,
-                    box_mode="percent",
-                    box_value=0.015,
-                    reversal=3,
-                )
-                pf_res = evaluate_pf(
-                    pf_chart,
-                    last_price=last,
-                    box_value=0.015,
-                )
-
-                if self._enable_audit:
-                    self._audit_symbol(sym, closes, lookback_days, bench_closes)
-
-                # --- Returns ---
-                r3m = self._return_over(closes, 63)
-                r6m = self._return_over(closes, 126)
-
-                # --- Trend (SMA) ---
-                sma200 = float(self._sma(closes, 200))
-
-                # --- Relative strength vs benchmark (return differential) ---
-                rs6m: Optional[float] = None
-                if bench_closes is not None and len(bench_closes) >= 127 and len(closes) >= 127:
-                    br6m = self._return_over(bench_closes, 126)
-                    rs6m = r6m - br6m
-
-                # --- Liquidity ---
-                dv20 = float(self._avg_dollar_vol(closes, vols, 20))
-                liq = float(self._liquidity_score(dv20))
-
-                # --- Option B: start from PF regime/score ---
-                regime = getattr(pf_res, "regime", "NEUTRAL")
-                score = float(getattr(pf_res, "score", 0.0))
-
-                # --- Context multipliers ---
-                mult = 1.0
-                if regime == "BULLISH":
-                    if rs6m is not None and rs6m < 0:
-                        mult *= 0.6
-                    if last <= sma200:
-                        mult *= 0.5
-                elif regime == "BEARISH":
-                    if rs6m is not None and rs6m > 0:
-                        mult *= 0.7
-                    if last >= sma200:
-                        mult *= 0.7
-
-                score *= mult
-
-                # --- Whipsaw damping ---
-                sell_cs = getattr(pf_res, "sell_cs", None)
-                buy_cs = getattr(pf_res, "buy_cs", None)
-
-                if regime == "BULLISH" and isinstance(sell_cs, int) and sell_cs <= 2:
-                    score *= 0.75
-                if regime == "BEARISH" and isinstance(buy_cs, int) and buy_cs <= 2:
-                    score *= 0.75
-
-                # --- Liquidity add-on last ---
-                if regime != "NEUTRAL":
-                    score += 5.0 * liq
-
-                # --- PF summary fields (safe) ---
-                signal = getattr(pf_res, "signal", None)
-                active_name = getattr(signal, "name", "none") if signal else "none"
-                active_trigger = getattr(signal, "trigger", None) if signal else None
-                active_cs = getattr(pf_res, "cols_since", None)
-
-                buy_sig = getattr(pf_res, "buy_sig", None)
-                sell_sig = getattr(pf_res, "sell_sig", None)
-                buy_trigger = getattr(buy_sig, "trigger", None) if buy_sig else None
-                sell_trigger = getattr(sell_sig, "trigger", None) if sell_sig else None
-
-                cur_type = getattr(pf_res, "cur_type", "?")
-                cur_low = float(getattr(pf_res, "cur_low", 0.0))
-                cur_high = float(getattr(pf_res, "cur_high", 0.0))
-
-                # Optional UX: hide “active” in NEUTRAL
-                if regime == "NEUTRAL":
-                    active_name = "none"
-                    active_trigger = None
-                    active_cs = None
-
-                result = ScanResultRow(
-                    symbol=sym,
-                    regime=regime,
-                    score=float(score),
-
-                    pf_active_name=active_name,
-                    pf_active_trigger=active_trigger,
-                    pf_active_cs=active_cs,
-
-                    pf_buy_trigger=buy_trigger,
-                    pf_buy_cs=buy_cs if isinstance(buy_cs, int) else None,
-                    pf_sell_trigger=sell_trigger,
-                    pf_sell_cs=sell_cs if isinstance(sell_cs, int) else None,
-
-                    pf_cur_type=str(cur_type),
-                    pf_cur_low=cur_low,
-                    pf_cur_high=cur_high,
-                )
-
-                print(f"{sym}: regime={regime} score={score:.2f} row={result}")
-                out.append(result)
-
-            except Exception as e:
-                out.append(self._error_row(sym, f"error: {e}"))
+                row = self._scan_symbol(sym, lookback_days, bench_closes)
+            except Exception as exc:  # per-symbol guardrail
+                print(f"{sym}: scan error: {exc!r}")
+                row = self._error_row(sym, f"error: {exc}")
+            out.append(row)
 
         out.sort(key=lambda r: r.score, reverse=True)
         return out
+
+    def _try_get_benchmark_closes(self, lookback_days: int) -> Optional[List[float]]:
+        try:
+            bench_series = self._safe_fetch_series(self._benchmark, lookback_days)
+        except Exception as exc:
+            print(f"{self._benchmark}: benchmark fetch error: {exc!r}")
+            return None
+
+        if bench_series is None:
+            print(f"{self._benchmark}: benchmark unavailable")
+            return None
+
+        bench_closes = bench_series[0]
+        if len(bench_closes) < 130:
+            print(f"{self._benchmark}: benchmark insufficient ({len(bench_closes)} bars)")
+            return None
+        return bench_closes
+
+    def _scan_symbol(
+            self,
+            sym: str,
+            lookback_days: int,
+            bench_closes: Optional[List[float]],
+    ) -> ScanResultRow:
+        series = self._safe_fetch_series(sym, lookback_days)
+        if series is None:
+            print(f"{sym}: insufficient data (no usable bars)")
+            return self._error_row(sym, "insufficient data")
+
+        closes, vols = series
+        if len(closes) < 210:
+            print(f"{sym}: insufficient data ({len(closes)} bars)")
+            return self._error_row(sym, "insufficient data")
+
+        last = float(closes[-1])
+
+        # --- P&F evaluation (Option B driver) ---
+        pf_chart = build_pf_from_closes(
+            closes,
+            box_mode="percent",
+            box_value=0.015,
+            reversal=3,
+        )
+        pf_res = evaluate_pf(
+            pf_chart,
+            last_price=last,
+            box_value=0.015,
+        )
+
+        if self._enable_audit:
+            # Audit uses already-fetched series; no refetch inside audit.
+            self._audit_symbol(sym, closes, lookback_days, bench_closes)
+
+        # --- Returns ---
+        r6m = self._return_over(closes, 126)
+
+        # --- Trend (SMA) ---
+        sma200 = float(self._sma(closes, 200))
+
+        # --- Relative strength vs benchmark (return differential) ---
+        rs6m: Optional[float] = None
+        if bench_closes is not None and len(bench_closes) >= 127 and len(closes) >= 127:
+            br6m = self._return_over(bench_closes, 126)
+            rs6m = r6m - br6m
+
+        # --- Liquidity ---
+        dv20 = float(self._avg_dollar_vol(closes, vols, 20))
+        liq = float(self._liquidity_score(dv20))
+
+        # --- Option B: start from PF regime/score ---
+        regime = str(getattr(pf_res, "regime", "NEUTRAL"))
+        base_score = float(getattr(pf_res, "score", 0.0))
+
+        # --- Context multipliers (applied first) ---
+        score = base_score
+        mult = 1.0
+        if regime == "BULLISH":
+            if rs6m is not None and rs6m < 0:
+                mult *= 0.6
+            if last <= sma200:
+                mult *= 0.5
+        elif regime == "BEARISH":
+            if rs6m is not None and rs6m > 0:
+                mult *= 0.7
+            if last >= sma200:
+                mult *= 0.7
+        score *= mult
+
+        # --- Whipsaw damping (signal proximity after context) ---
+        buy_cs = _safe_cols_since(getattr(pf_res, "buy_cs", None))
+        sell_cs = _safe_cols_since(getattr(pf_res, "sell_cs", None))
+
+        if regime == "BULLISH" and sell_cs is not None:
+            if sell_cs <= 2:
+                score *= 0.75
+            if buy_cs is not None and abs(buy_cs - sell_cs) <= 1:
+                score *= 0.9
+        elif regime == "BEARISH" and buy_cs is not None:
+            if buy_cs <= 2:
+                score *= 0.75
+            if sell_cs is not None and abs(buy_cs - sell_cs) <= 1:
+                score *= 0.9
+
+        # --- Liquidity add-on last (only non-neutral regimes) ---
+        if regime != "NEUTRAL":
+            score += 5.0 * liq
+
+        # --- PF summary fields (contract-safe) ---
+        signal = getattr(pf_res, "signal", None)
+        active_name = getattr(signal, "name", "none") if signal else "none"
+        active_trigger = _safe_signal_trigger(signal)
+        active_cs = _safe_cols_since(getattr(pf_res, "cols_since", None))
+
+        buy_sig = getattr(pf_res, "buy_sig", None)
+        sell_sig = getattr(pf_res, "sell_sig", None)
+        buy_trigger = _safe_signal_trigger(buy_sig)
+        sell_trigger = _safe_signal_trigger(sell_sig)
+
+        cur_type = str(getattr(pf_res, "cur_type", "?"))
+        cur_low = float(getattr(pf_res, "cur_low", 0.0))
+        cur_high = float(getattr(pf_res, "cur_high", 0.0))
+
+        # UX rule: neutral posture should not advertise an active signal.
+        if regime == "NEUTRAL":
+            active_name = "none"
+            active_trigger = None
+            active_cs = None
+
+        result = ScanResultRow(
+            symbol=sym,
+            regime=regime,
+            score=float(score),
+            pf_active_name=active_name,
+            pf_active_trigger=active_trigger,
+            pf_active_cs=active_cs,
+            pf_buy_trigger=buy_trigger,
+            pf_buy_cs=buy_cs,
+            pf_sell_trigger=sell_trigger,
+            pf_sell_cs=sell_cs,
+            pf_cur_type=cur_type,
+            pf_cur_low=cur_low,
+            pf_cur_high=cur_high,
+        )
+
+        print(f"{sym}: regime={regime} base={base_score:.2f} score={score:.2f} row={result}")
+        return result
 
     # -------------------------
     # Audit (console-only)
@@ -231,14 +265,19 @@ class DomainScanner:
         if chart.columns:
             cur = chart.current
             if last < cur.low or last > cur.high * (1.0 + 2 * 0.015):
-                print(f"{symbol} P&F SANITY FAIL: last close {last:.2f} not compatible with "
-                      f"current column {cur.low:.2f}..{cur.high:.2f}")
+                print(
+                    f"{symbol} P&F SANITY FAIL: last close {last:.2f} not compatible with "
+                    f"current column {cur.low:.2f}..{cur.high:.2f}"
+                )
             print(
                 f"{symbol} P&F CURRENT:",
                 cur.col_type,
-                "LOW:", f"{cur.low:.2f}",
-                "HIGH:", f"{cur.high:.2f}",
-                "BOXES:", len(cur.boxes),
+                "LOW:",
+                f"{cur.low:.2f}",
+                "HIGH:",
+                f"{cur.high:.2f}",
+                "BOXES:",
+                len(cur.boxes),
             )
             print(f"{symbol} P&F TAPE:", summarize_pf(chart, last_n=10))
 
@@ -328,7 +367,7 @@ class DomainScanner:
         return max(lo, min(hi, x))
 
     # -------------------------
-    # Regime / score
+    # Legacy helpers (kept for reference)
     # -------------------------
 
     def _regime(
@@ -347,14 +386,14 @@ class DomainScanner:
 
         rs_ok = True
         if rs6m is not None or rs3m is not None:
-            rs_ok = ((rs6m is not None and rs6m > 0) or (rs3m is not None and rs3m > 0))
+            rs_ok = (rs6m is not None and rs6m > 0) or (rs3m is not None and rs3m > 0)
 
         if r6m > 0 and above_50 and (ma_bull or above_200) and rs_ok:
             return "BULLISH"
 
         rs_bad = False
         if rs6m is not None and rs3m is not None:
-            rs_bad = (rs6m < 0 and rs3m < 0)
+            rs_bad = rs6m < 0 and rs3m < 0
 
         if r6m < 0 and (not above_50) and (not above_200) and rs_bad:
             return "BEARISH"
@@ -409,6 +448,8 @@ class DomainScanner:
         )
 
     def _error_row(self, sym: str, msg: str) -> ScanResultRow:
+        # Log message so failures are not silent, even though the UI contract has no note field.
+        print(f"{sym}: {msg}")
         return ScanResultRow(
             symbol=sym,
             regime="ERROR",
@@ -424,3 +465,29 @@ class DomainScanner:
             pf_cur_low=0.0,
             pf_cur_high=0.0,
         )
+
+
+def run_self_test(data_provider: MarketDataProvider, symbol: str, lookback_days: int = 400) -> ScanResultRow:
+    """Minimal unit-style sanity check for the scanner contract and PF column type."""
+    scanner = DomainScanner(data_provider=data_provider, enable_audit=False)
+
+    closes_vols = scanner._safe_fetch_series(symbol, lookback_days)
+    if closes_vols is None:
+        raise RuntimeError(f"self-test: no data for {symbol}")
+
+    closes, _vols = closes_vols
+    chart = build_pf_from_closes(closes, box_mode="percent", box_value=0.015, reversal=3)
+    if chart.columns and chart.current.col_type not in {"X", "O"}:
+        raise RuntimeError(f"self-test: unexpected PFColumn col_type={chart.current.col_type!r}")
+
+    rows = scanner.scan([symbol], lookback_days)
+    if not rows:
+        raise RuntimeError("self-test: scanner returned no rows")
+
+    row = rows[0]
+    required_strs = (row.symbol, row.regime, row.pf_active_name, row.pf_cur_type)
+    if any(not isinstance(v, str) or not v for v in required_strs):
+        raise RuntimeError(f"self-test: required string fields missing: {row}")
+    if not isinstance(row.score, float):
+        raise RuntimeError(f"self-test: score is not float: {row.score!r}")
+    return row
