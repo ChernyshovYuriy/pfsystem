@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QTableView,
@@ -117,7 +118,7 @@ class MainWindow(QMainWindow):
         self._services = services
         self._thread: QThread | None = None
         self._worker = None
-        self._closes_cache: dict[str, list[float]] = {}
+        self._last_scan_response = None
         self._modal_overlay: QWidget | None = None
         self._blur_effect: QGraphicsBlurEffect | None = None
 
@@ -207,7 +208,7 @@ class MainWindow(QMainWindow):
 
     def _on_scan_done(self, resp) -> None:
         self._table_model.set_rows(resp.rows)
-        self._closes_cache = resp.closes_cache
+        self._last_scan_response = resp
         self._status.setText(f"Done. {len(resp.rows)} results.")
         self._scan_btn.setEnabled(True)
         if self._thread:
@@ -223,9 +224,10 @@ class MainWindow(QMainWindow):
         if not index.isValid():
             return
         row = self._table_model._rows[index.row()]
-        closes = self._closes_cache.get(row.symbol)
+        closes_cache = self._last_scan_response.closes_cache if self._last_scan_response else {}
+        closes = closes_cache.get(row.symbol)
         if not closes:
-            self._status.setText(f"No cached closes available for {row.symbol}.")
+            QMessageBox.warning(self, "Missing cached data", f"No cached data for {row.symbol}. Re-run scan.")
             return
 
         dialog = PFChartDialog(row.symbol, closes, parent=self)

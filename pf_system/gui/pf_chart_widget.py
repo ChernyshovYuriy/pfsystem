@@ -13,6 +13,8 @@ class PFChartWidget(QWidget):
     BOX_SIZE = 14
     COL_SPACING = 8
     MARGIN = 20
+    MIN_HEIGHT = 400
+    MIN_WIDTH = 480
 
     def __init__(self, closes: List[float], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -30,18 +32,36 @@ class PFChartWidget(QWidget):
         levels = {box for col in self._chart.columns for box in col.boxes}
         return sorted(levels)
 
+    def set_symbol_and_closes(self, _symbol: str, closes: List[float]) -> None:
+        self._chart = build_pf_from_closes(
+            closes,
+            box_mode="percent",
+            box_value=0.015,
+            reversal=3,
+        )
+        self._levels = self._build_levels()
+        self._level_index = {level: idx for idx, level in enumerate(self._levels)}
+        self._update_geometry()
+        self.updateGeometry()
+        self.update()
+
     def _update_geometry(self) -> None:
         if not self._levels or not self._chart.columns:
-            self._chart_width = 480
-            self._chart_height = 320
+            self._chart_width = self.MIN_WIDTH
+            self._chart_height = self.MIN_HEIGHT
             return
 
         col_width = self.BOX_SIZE + self.COL_SPACING
-        self._chart_width = (len(self._chart.columns) * col_width) + (self.MARGIN * 2)
-        self._chart_height = (len(self._levels) * self.BOX_SIZE) + (self.MARGIN * 2)
+        width = (len(self._chart.columns) * col_width) + (self.MARGIN * 2)
+        height = (len(self._levels) * self.BOX_SIZE) + (self.MARGIN * 2)
+        self._chart_width = max(self.MIN_WIDTH, width)
+        self._chart_height = max(self.MIN_HEIGHT, height)
 
     def sizeHint(self) -> QSize:  # pragma: no cover - Qt sizing
         return QSize(self._chart_width, self._chart_height)
+
+    def minimumSizeHint(self) -> QSize:  # pragma: no cover - Qt sizing
+        return QSize(self.MIN_WIDTH, self.MIN_HEIGHT)
 
     def paintEvent(self, event) -> None:  # pragma: no cover - Qt paint
         painter = QPainter(self)
