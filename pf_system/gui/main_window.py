@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, QThread, Signal, Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtWidgets import (
+    QGraphicsBlurEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
 from pf_system.app.dto import ScanRequest
 from pf_system.app.services import AppServices
 from pf_system.domain.models import ScanResultRow
+from pf_system.gui.pf_dialog import PFChartDialog
 
 
 class ScanResultsTableModel(QAbstractTableModel):
@@ -115,6 +117,9 @@ class MainWindow(QMainWindow):
         self._services = services
         self._thread: QThread | None = None
         self._worker = None
+        self._closes_cache: dict[str, list[float]] = {}
+        self._modal_overlay: QWidget | None = None
+        self._blur_effect: QGraphicsBlurEffect | None = None
 
         self.setWindowTitle("P&F Market Scanner (Skeleton)")
 
@@ -138,6 +143,7 @@ class MainWindow(QMainWindow):
         self._table = QTableView()
         self._table.setModel(self._table_model)
         self._table.setSortingEnabled(False)
+        self._table.doubleClicked.connect(self._on_row_double_clicked)
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Symbols:"))
@@ -201,6 +207,7 @@ class MainWindow(QMainWindow):
 
     def _on_scan_done(self, resp) -> None:
         self._table_model.set_rows(resp.rows)
+        self._closes_cache = resp.closes_cache
         self._status.setText(f"Done. {len(resp.rows)} results.")
         self._scan_btn.setEnabled(True)
         if self._thread:
@@ -211,3 +218,42 @@ class MainWindow(QMainWindow):
         self._scan_btn.setEnabled(True)
         if self._thread:
             self._thread.quit()
+
+    def _on_row_double_clicked(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        row = self._table_model._rows[index.row()]
+        closes = self._closes_cache.get(row.symbol)
+        if not closes:
+            self._status.setText(f"No cached closes available for {row.symbol}.")
+            return
+
+        dialog = PFChartDialog(row.symbol, closes, parent=self)
+        self._show_modal_overlay()
+        try:
+            dialog.exec()
+        finally:
+            self._hide_modal_overlay()
+
+    def _show_modal_overlay(self) -> None:
+        if self._modal_overlay is None:
+            self._modal_overlay = QWidget(self)
+            self._modal_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 160);")
+        self._modal_overlay.setGeometry(self.centralWidget().geometry())
+        self._modal_overlay.show()
+        self._modal_overlay.raise_()
+
+        if self._blur_effect is None:
+            self._blur_effect = QGraphicsBlurEffect()
+            self._blur_effect.setBlurRadius(6)
+        self.centralWidget().setGraphicsEffect(self._blur_effect)
+
+    def _hide_modal_overlay(self) -> None:
+        if self._modal_overlay is not None:
+            self._modal_overlay.hide()
+        self.centralWidget().setGraphicsEffect(None)
+
+    def resizeEvent(self, event) -> None:  # pragma: no cover - Qt event
+        super().resizeEvent(event)
+        if self._modal_overlay is not None and self._modal_overlay.isVisible():
+            self._modal_overlay.setGeometry(self.centralWidget().geometry())

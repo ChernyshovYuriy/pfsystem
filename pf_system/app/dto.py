@@ -15,6 +15,10 @@ class ScanRequest:
 @dataclass(frozen=True)
 class ScanResponse:
     rows: List[ScanResultRow]
+    closes_cache: Dict[str, List[float]]
 
     def to_payload(self) -> Dict[str, Any]:
-        return {"rows": [asdict(r) for r in self.rows]}
+        return {
+            "rows": [asdict(r) for r in self.rows],
+            "closes_cache": self.closes_cache,
+        }
