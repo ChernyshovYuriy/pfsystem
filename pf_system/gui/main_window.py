@@ -252,6 +252,7 @@ class MainWindow(QMainWindow):
         if self._modal_overlay is not None:
             self._modal_overlay.hide()
         self.centralWidget().setGraphicsEffect(None)
+        self._blur_effect = None
 
     def resizeEvent(self, event) -> None:  # pragma: no cover - Qt event
         super().resizeEvent(event)
