@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
@@ -11,14 +11,14 @@ def stockcharts_pf_url(symbol: str, *, box_pct: float, reversal: int) -> str:
     if not normalized:
         return "https://stockcharts.com/"
 
-    params = {
-        "symbol": normalized,
-        "chart": "PNF",
-        "boxmode": "percent",
-        "box": f"{box_pct * 100:.2f}",
-        "reversal": str(reversal),
-    }
-    return "https://stockcharts.com/def/servlet/SharpChartv05.ServletDriver?" + urlencode(params)
+    # params = {
+    #     "symbol": normalized,
+    #     "chart": "PNF",
+    #     "boxmode": "percent",
+    #     "box": f"{box_pct * 100:.2f}",
+    #     "reversal": str(reversal),
+    # }
+    return "https://stockcharts.com/freecharts/pnf.php?c=" + normalized + "%2Cp"
 
 
 def stockcharts_symbol_url(symbol: str) -> str:
