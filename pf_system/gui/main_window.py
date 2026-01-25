@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pf_system.app.dto import ScanRequest
+from pf_system.app.dto import ScanRequest, ScanResponse
 from pf_system.app.services import AppServices
 from pf_system.domain.models import ScanResultRow
 from pf_system.gui.pf_dialog import PFChartDialog
@@ -50,6 +50,11 @@ class ScanResultsTableModel(QAbstractTableModel):
 
     def columnCount(self, parent=QModelIndex()) -> int:
         return len(self.HEADERS)
+
+    def get_row(self, index: int) -> ScanResultRow | None:
+        if index < 0 or index >= len(self._rows):
+            return None
+        return self._rows[index]
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
         if role != Qt.DisplayRole:
@@ -96,7 +101,7 @@ class ScanResultsTableModel(QAbstractTableModel):
 
 
 class _ScanWorker(QObject):
-    finished = Signal(object)  # ScanResponse
+    finished = Signal(ScanResponse)
     failed = Signal(str)
 
     def __init__(self, services: AppServices, req: ScanRequest) -> None:
@@ -117,8 +122,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._services = services
         self._thread: QThread | None = None
-        self._worker = None
-        self._last_scan_response = None
+        self._worker: _ScanWorker | None = None
+        self._last_scan_response: ScanResponse | None = None
         self._last_scan_lookback: int | None = None
         self._modal_overlay: QWidget | None = None
         self._blur_effect: QGraphicsBlurEffect | None = None
@@ -172,7 +177,10 @@ class MainWindow(QMainWindow):
             return
 
         idx = selected.indexes()[0]
-        row = self._table_model._rows[idx.row()]
+        row = self._table_model.get_row(idx.row())
+        if row is None:
+            self._details.setText("Select a row to see details.")
+            return
 
         self._details.setText(
             f"{row.symbol} | {row.regime} | score={row.score:.2f} | "
@@ -185,6 +193,9 @@ class MainWindow(QMainWindow):
         symbols = [s.strip() for s in self._symbols.text().split(",") if s.strip()]
         if not symbols:
             self._status.setText("Enter at least one symbol.")
+            return
+        if self._thread is not None and self._thread.isRunning():
+            self._status.setText("Scan already in progress.")
             return
 
         req = ScanRequest(symbols=symbols, lookback_days=int(self._lookback.value()))
@@ -208,24 +219,32 @@ class MainWindow(QMainWindow):
 
         self._thread.start()
 
-    def _on_scan_done(self, resp) -> None:
+    def _on_scan_done(self, resp: ScanResponse) -> None:
         self._table_model.set_rows(resp.rows)
         self._last_scan_response = resp
         self._status.setText(f"Done. {len(resp.rows)} results.")
         self._scan_btn.setEnabled(True)
-        if self._thread:
-            self._thread.quit()
+        self._cleanup_scan_thread()
 
     def _on_scan_failed(self, msg: str) -> None:
         self._status.setText(f"Scan failed: {msg}")
         self._scan_btn.setEnabled(True)
-        if self._thread:
-            self._thread.quit()
+        self._cleanup_scan_thread()
+
+    def _cleanup_scan_thread(self) -> None:
+        if self._thread is None:
+            return
+        self._thread.quit()
+        self._thread.wait()
+        self._thread = None
+        self._worker = None
 
     def _on_row_double_clicked(self, index: QModelIndex) -> None:
         if not index.isValid():
             return
-        row = self._table_model._rows[index.row()]
+        row = self._table_model.get_row(index.row())
+        if row is None:
+            return
         closes_cache = self._last_scan_response.closes_cache if self._last_scan_response else {}
         closes = closes_cache.get(row.symbol)
         if not closes:
