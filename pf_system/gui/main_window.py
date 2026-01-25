@@ -119,6 +119,7 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._worker = None
         self._last_scan_response = None
+        self._last_scan_lookback: int | None = None
         self._modal_overlay: QWidget | None = None
         self._blur_effect: QGraphicsBlurEffect | None = None
 
@@ -187,6 +188,7 @@ class MainWindow(QMainWindow):
             return
 
         req = ScanRequest(symbols=symbols, lookback_days=int(self._lookback.value()))
+        self._last_scan_lookback = req.lookback_days
 
         self._scan_btn.setEnabled(False)
         self._status.setText(f"Scanning {len(symbols)} symbols...")
@@ -230,7 +232,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing cached data", f"No cached data for {row.symbol}. Re-run scan.")
             return
 
-        dialog = PFChartDialog(row.symbol, closes, parent=self)
+        lookback_days = self._last_scan_lookback or int(self._lookback.value())
+        dialog = PFChartDialog(row, closes, lookback_days, parent=self)
         self._show_modal_overlay()
         try:
             dialog.exec()
