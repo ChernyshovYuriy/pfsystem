@@ -37,13 +37,10 @@ class PFChartDialog(QDialog):
 
         title = QLabel(f"{row.symbol} – Point & Figure")
         title.setStyleSheet("font-size: 16px; font-weight: 600;")
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.accept)
 
         header = QHBoxLayout()
         header.addWidget(title)
         header.addStretch(1)
-        header.addWidget(close_btn)
 
         chart = PFChartWidget(closes)
         scroll = QScrollArea()
