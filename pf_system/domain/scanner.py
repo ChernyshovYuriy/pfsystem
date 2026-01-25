@@ -34,15 +34,24 @@ class DomainScanner:
         self._data = data_provider
         self._benchmark = benchmark
         self._enable_audit = enable_audit
+        self._last_closes_cache: dict[str, list[float]] = {}
+
+    @property
+    def last_closes_cache(self) -> dict[str, list[float]]:
+        return self._last_closes_cache
 
     def scan(self, symbols: Sequence[str], lookback_days: int) -> List[ScanResultRow]:
         out: List[ScanResultRow] = []
+        self._last_closes_cache = {}
 
         bench_closes = self._try_get_benchmark_closes(lookback_days)
 
         for sym in symbols:
             try:
-                row = self._scan_symbol(sym, lookback_days, bench_closes)
+                series = self._safe_fetch_series(sym, lookback_days)
+                if series is not None:
+                    self._last_closes_cache[sym] = series[0]
+                row = self._scan_symbol(sym, lookback_days, bench_closes, series)
             except Exception as exc:  # per-symbol guardrail
                 print(f"{sym}: scan error: {exc!r}")
                 row = self._error_row(sym, f"error: {exc}")
@@ -73,8 +82,8 @@ class DomainScanner:
             sym: str,
             lookback_days: int,
             bench_closes: Optional[List[float]],
+            series: Optional[Tuple[List[float], List[float]]] = None,
     ) -> ScanResultRow:
-        series = self._safe_fetch_series(sym, lookback_days)
         if series is None:
             print(f"{sym}: insufficient data (no usable bars)")
             return self._error_row(sym, "insufficient data")
