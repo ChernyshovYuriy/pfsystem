@@ -11,7 +11,7 @@ class ScanMarketUseCase:
         self._repo = repo
 
     def execute(self, req: ScanRequest) -> ScanResponse:
-        rows = self._scanner.scan(req.symbols, req.lookback_days)
-        resp = ScanResponse(rows=rows, closes_cache=self._scanner.last_closes_cache)
+        rows, closes_cache = self._scanner.scan(req.symbols, req.lookback_days)
+        resp = ScanResponse(rows=rows, closes_cache=closes_cache)
         self._repo.save_scan(resp.to_payload())  # no-op for now
         return resp

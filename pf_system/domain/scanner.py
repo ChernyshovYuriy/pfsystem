@@ -34,15 +34,14 @@ class DomainScanner:
         self._data = data_provider
         self._benchmark = benchmark
         self._enable_audit = enable_audit
-        self._last_closes_cache: dict[str, list[float]] = {}
 
-    @property
-    def last_closes_cache(self) -> dict[str, list[float]]:
-        return self._last_closes_cache
-
-    def scan(self, symbols: Sequence[str], lookback_days: int) -> List[ScanResultRow]:
+    def scan(
+            self,
+            symbols: Sequence[str],
+            lookback_days: int,
+    ) -> Tuple[List[ScanResultRow], dict[str, list[float]]]:
         out: List[ScanResultRow] = []
-        self._last_closes_cache = {}
+        closes_cache: dict[str, list[float]] = {}
 
         bench_closes = self._try_get_benchmark_closes(lookback_days)
 
@@ -50,7 +49,7 @@ class DomainScanner:
             try:
                 series = self._safe_fetch_series(sym, lookback_days)
                 if series is not None:
-                    self._last_closes_cache[sym] = series[0]
+                    closes_cache[sym] = series[0]
                 row = self._scan_symbol(sym, lookback_days, bench_closes, series)
             except Exception as exc:  # per-symbol guardrail
                 print(f"{sym}: scan error: {exc!r}")
@@ -58,7 +57,7 @@ class DomainScanner:
             out.append(row)
 
         out.sort(key=lambda r: r.score, reverse=True)
-        return out
+        return out, closes_cache
 
     def _try_get_benchmark_closes(self, lookback_days: int) -> Optional[List[float]]:
         try:
@@ -489,7 +488,7 @@ def run_self_test(data_provider: MarketDataProvider, symbol: str, lookback_days:
     if chart.columns and chart.current.col_type not in {"X", "O"}:
         raise RuntimeError(f"self-test: unexpected PFColumn col_type={chart.current.col_type!r}")
 
-    rows = scanner.scan([symbol], lookback_days)
+    rows, _closes_cache = scanner.scan([symbol], lookback_days)
     if not rows:
         raise RuntimeError("self-test: scanner returned no rows")
 

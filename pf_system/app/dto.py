@@ -20,5 +20,4 @@ class ScanResponse:
     def to_payload(self) -> Dict[str, Any]:
         return {
             "rows": [asdict(r) for r in self.rows],
-            "closes_cache": self.closes_cache,
         }
