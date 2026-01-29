@@ -151,8 +151,12 @@ class StrongRuleProxy(QSortFilterProxyModel):
         except Exception:
             return float("nan")
 
-    def _is_strong_candidate(self, phase: str, regime: str, score: float) -> bool:
-        if phase != "FRESH":
+    def _is_strong_candidate(self, phase: str, regime: str, score: float, entry: float) -> bool:
+        if phase not in ("FRESH", "OK"):
+            return False
+        if entry != entry:  # NaN
+            return False
+        if entry < 60.0:
             return False
         if regime == "BULLISH":
             return score >= self.min_abs_score
@@ -180,8 +184,8 @@ class StrongRuleProxy(QSortFilterProxyModel):
         r_entry = self._to_float(m.index(right.row(), 9).data())
 
         # 1) Strong-rule candidates first
-        l_strong = self._is_strong_candidate(l_phase, l_reg, l_score)
-        r_strong = self._is_strong_candidate(r_phase, r_reg, r_score)
+        l_strong = self._is_strong_candidate(str(l_phase), str(l_reg), l_score, l_entry)
+        r_strong = self._is_strong_candidate(str(r_phase), str(r_reg), r_score, r_entry)
         if l_strong != r_strong:
             # We want True to mean "left < right" in ascending sort,
             # so if left is NOT strong and right IS strong, left should be "greater".
@@ -199,15 +203,18 @@ class StrongRuleProxy(QSortFilterProxyModel):
         if lr != rr:
             return lr > rr  # reverse so bullish first
 
-        # 4) Strength: abs(score) descending
+        # 4) For FRESH/OK phases, prioritize Entry score DESC (timing) first
+        l_phase_s = str(l_phase)
+        r_phase_s = str(r_phase)
+        if l_phase_s in ("FRESH", "OK") and r_phase_s in ("FRESH", "OK"):
+            if l_entry != r_entry:
+                return l_entry < r_entry  # higher entry first
+
+        # 5) Strength: abs(score) DESC
         la = abs(l_score) if l_score == l_score else -1.0
         ra = abs(r_score) if r_score == r_score else -1.0
         if la != ra:
-            return la < ra  # normal comparator: smaller is "less" => this yields descending in practice via inversion above
-
-        # 5) Entry score descending (where available)
-        if l_entry != r_entry:
-            return l_entry < r_entry
+            return la < ra
 
         # 6) Symbol tie-break
         l_sym = m.index(left.row(), 0).data()
