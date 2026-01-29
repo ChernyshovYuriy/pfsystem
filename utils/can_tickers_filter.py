@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 canada_universe_filter.py
 
@@ -88,38 +87,37 @@ DEFAULT_THRESHOLDS: Dict[str, ExchangeThresholds] = {
     # TSX
     "TO": ExchangeThresholds(
         min_price=1.00,
-        min_avg_dollar_vol_30d=1_500_000.0,
-        min_active_days_ratio=0.95,
-        max_volume_cv=4.0,
-        adr_min=0.02,
-        adr_max=0.12,
+        min_avg_dollar_vol_30d=250_000.0,
+        min_active_days_ratio=0.85,
+        max_volume_cv=6.0,
+        adr_min=0.01,
+        adr_max=0.20,
     ),
     # TSX Venture
     "V": ExchangeThresholds(
-        min_price=0.50,
-        min_avg_dollar_vol_30d=750_000.0,
-        min_active_days_ratio=0.95,
-        max_volume_cv=4.0,
-        adr_min=0.02,
-        adr_max=0.12,
+        min_price=1.00,
+        min_avg_dollar_vol_30d=150_000.0,
+        min_active_days_ratio=0.70,
+        max_volume_cv=6.0,
+        adr_min=0.01,
+        adr_max=0.20,
     ),
-    # CSE (stricter / many are illiquid)
+    # CSE / CNSX
     "CN": ExchangeThresholds(
-        min_price=0.75,
-        min_avg_dollar_vol_30d=1_000_000.0,
-        min_active_days_ratio=0.98,  # stricter for CN
-        max_volume_cv=4.0,
-        adr_min=0.02,
-        adr_max=0.12,
+        min_price=1.00,
+        min_avg_dollar_vol_30d=300_000.0,
+        min_active_days_ratio=0.70,
+        max_volume_cv=6.0,
+        adr_min=0.01,
+        adr_max=0.20,
     ),
-    # Fallback for unknown suffixes
     "OTHER": ExchangeThresholds(
         min_price=1.00,
-        min_avg_dollar_vol_30d=1_500_000.0,
-        min_active_days_ratio=0.95,
-        max_volume_cv=4.0,
-        adr_min=0.02,
-        adr_max=0.12,
+        min_avg_dollar_vol_30d=250_000.0,
+        min_active_days_ratio=0.85,
+        max_volume_cv=6.0,
+        adr_min=0.01,
+        adr_max=0.20,
     ),
 }
 
@@ -441,11 +439,7 @@ def passes_hard_filters(m: Dict[str, float], th: ExchangeThresholds) -> Tuple[bo
     cv = m.get("volume_cv_30d", float("nan"))
     if not np.isfinite(cv) or cv > th.max_volume_cv:
         reasons.append(f"volume_cv>{th.max_volume_cv:g}")
-
-    # RS sanity: prefer improving RS, but do not hard reject on missing (Yahoo gaps happen).
-    rs_slope = m.get("rs_slope_63d", float("nan"))
-    if np.isfinite(rs_slope) and rs_slope < 0:
-        reasons.append("rs_slope_negative")
+    # RS is used for scoring/ranking only (not a hard reject).
 
     return (len(reasons) == 0), reasons
 
@@ -741,6 +735,10 @@ def main() -> None:
         cols = [c for c in cols if c in kept_df.columns]
         print("\n=== TOP KEPT TICKERS (preview) ===")
         print(kept_df[cols].head(25).to_string(index=False))
+
+        # Comma-separated list for PFSystem paste
+        print("\n=== PFSYSTEM SYMBOLS (comma-separated) ===")
+        print(",".join(kept_df["ticker"].tolist()))
 
 
 if __name__ == "__main__":

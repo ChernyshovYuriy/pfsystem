@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Sequence, Tuple
 
+from pf_system.config.settings import Settings
 from pf_system.domain.models import ScanResultRow
 from pf_system.domain.pf_engine import evaluate_pf
 from pf_system.domain.pf_verify import summarize_pf, verify_pf_chart
@@ -21,6 +22,31 @@ def _safe_cols_since(value) -> Optional[int]:
     return int(value) if isinstance(value, int) else None
 
 
+def _entry_phase(cols_since: Optional[int], boxes_from_trigger: Optional[float]) -> str:
+    if cols_since is None or boxes_from_trigger is None:
+        return "na"
+    # “Fresh” = very recent and not stretched
+    if cols_since <= 1 and boxes_from_trigger <= 2.0:
+        return "FRESH"
+    # “OK” = still reasonable continuation (but not first print)
+    if cols_since <= 3 and boxes_from_trigger <= 6.0:
+        return "OK"
+    return "EXTENDED"
+
+
+def _entry_score(cols_since: Optional[int], boxes_from_trigger: Optional[float]) -> Optional[float]:
+    if cols_since is None or boxes_from_trigger is None:
+        return None
+
+    # Age penalty: older signal = worse entry timing
+    age_pen = min(40.0, 8.0 * float(cols_since))  # 0..40
+
+    # Extension penalty: stretched beyond 2 boxes = worse entry timing
+    ext_pen = min(60.0, 20.0 * max(0.0, boxes_from_trigger - 2.0))  # 0..60
+
+    return max(0.0, 100.0 - age_pen - ext_pen)
+
+
 class DomainScanner:
     """Domain service orchestrating data fetch, P&F evaluation, and scoring."""
 
@@ -31,6 +57,7 @@ class DomainScanner:
             *,
             enable_audit: bool = False,
     ) -> None:
+        self.settings = Settings()
         self._data = data_provider
         self._benchmark = benchmark
         self._enable_audit = enable_audit
@@ -98,13 +125,13 @@ class DomainScanner:
         pf_chart = build_pf_from_closes(
             closes,
             box_mode="percent",
-            box_value=0.015,
+            box_value=self.settings.box_value,
             reversal=3,
         )
         pf_res = evaluate_pf(
             pf_chart,
             last_price=last,
-            box_value=0.015,
+            box_value=self.settings.box_value,
         )
 
         if self._enable_audit:
@@ -180,11 +207,36 @@ class DomainScanner:
         cur_low = float(getattr(pf_res, "cur_low", 0.0))
         cur_high = float(getattr(pf_res, "cur_high", 0.0))
 
+        # --- Entry/timing layer (separate from structural score) ---
+        boxes_from_trigger: Optional[float] = None
+        entry_score: Optional[float] = None
+        entry_phase: str = "na"
+
+        if regime != "NEUTRAL" and active_trigger is not None and active_trigger > 0:
+            # Use last-price distance (simple + consistent with pf_engine scoring)
+            if active_name.startswith("BUY"):
+                distance_pct = (last / active_trigger) - 1.0
+            else:
+                distance_pct = (active_trigger / last) - 1.0
+
+            if distance_pct >= 0 and pf_res is not None:
+                # IMPORTANT: uses the SAME box_value you used to build PF
+                boxes_from_trigger = distance_pct / self.settings.box_value
+                entry_phase = _entry_phase(active_cs, boxes_from_trigger)
+                entry_score = _entry_score(active_cs, boxes_from_trigger)
+
+                # Make “Active” label truthy but not misleading
+                if active_name != "none":
+                    active_name = f"{active_name}_{entry_phase}"
+
         # UX rule: neutral posture should not advertise an active signal.
         if regime == "NEUTRAL":
             active_name = "none"
             active_trigger = None
             active_cs = None
+            entry_phase = "na"
+            entry_score = None
+            boxes_from_trigger = None
 
         result = ScanResultRow(
             symbol=sym,
@@ -200,6 +252,9 @@ class DomainScanner:
             pf_cur_type=cur_type,
             pf_cur_low=cur_low,
             pf_cur_high=cur_high,
+            pf_entry_phase=entry_phase,
+            pf_entry_score=entry_score,
+            pf_boxes_from_trigger=boxes_from_trigger
         )
 
         print(f"{sym}: regime={regime} base={base_score:.2f} score={score:.2f} row={result}")
@@ -233,7 +288,7 @@ class DomainScanner:
         chart = build_pf_from_closes(
             closes,
             box_mode="percent",
-            box_value=0.015,
+            box_value=self.settings.box_value,
             reversal=3,
         )
         ok, problems = verify_pf_chart(chart)
@@ -272,7 +327,7 @@ class DomainScanner:
         print(f"{symbol} P&F COLUMNS:", len(chart.columns))
         if chart.columns:
             cur = chart.current
-            if last < cur.low or last > cur.high * (1.0 + 2 * 0.015):
+            if last < cur.low or last > cur.high * (1.0 + 2 * self.settings.box_value):
                 print(
                     f"{symbol} P&F SANITY FAIL: last close {last:.2f} not compatible with "
                     f"current column {cur.low:.2f}..{cur.high:.2f}"
@@ -472,6 +527,9 @@ class DomainScanner:
             pf_cur_type="?",
             pf_cur_low=0.0,
             pf_cur_high=0.0,
+            pf_entry_phase="n/a",
+            pf_entry_score=0.0,
+            pf_boxes_from_trigger=0.0
         )
 
 
