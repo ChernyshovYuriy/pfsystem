@@ -27,6 +27,7 @@ class PFChartDialog(QDialog):
         self,
         row: ScanResultRow,
         closes: List[float],
+        dates: List[str] | None,
         lookback_days: int,
         parent: QWidget | None = None,
     ) -> None:
@@ -42,7 +43,7 @@ class PFChartDialog(QDialog):
         header.addWidget(title)
         header.addStretch(1)
 
-        chart = PFChartWidget(closes)
+        chart = PFChartWidget(closes, dates=dates)
         scroll = QScrollArea()
         scroll.setWidget(chart)
         scroll.setWidgetResizable(False)

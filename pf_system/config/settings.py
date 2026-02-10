@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Settings:
     # Scanning defaults
-    default_lookback_days: int = 252
+    default_lookback_days: int = 365
 
     # Placeholder for later (P&F defaults)
     box_mode: str = "percent"  # "percent" or "fixed"

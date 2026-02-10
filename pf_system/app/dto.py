@@ -15,7 +15,10 @@ class ScanRequest:
 @dataclass(frozen=True)
 class ScanResponse:
     rows: List[ScanResultRow]
-    closes_cache: Dict[str, List[float]]
+    # Cache used by the GUI to open a chart on double-click.
+    # Kept intentionally flexible because we may store tuples/dicts (date+close)
+    # in addition to the original List[float] shape.
+    closes_cache: Dict[str, List[Any]]
 
     def to_payload(self) -> Dict[str, Any]:
         return {

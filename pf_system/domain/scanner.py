@@ -66,9 +66,10 @@ class DomainScanner:
             self,
             symbols: Sequence[str],
             lookback_days: int,
-    ) -> Tuple[List[ScanResultRow], dict[str, list[float]]]:
+    ) -> Tuple[List[ScanResultRow], dict[str, list]]:
         out: List[ScanResultRow] = []
-        closes_cache: dict[str, list[float]] = {}
+        # GUI cache: may store List[float] or richer shapes (e.g. (date, close)).
+        closes_cache: dict[str, list] = {}
 
         bench_closes = self._try_get_benchmark_closes(lookback_days)
 
@@ -76,7 +77,9 @@ class DomainScanner:
             try:
                 series = self._safe_fetch_series(sym, lookback_days)
                 if series is not None:
-                    closes_cache[sym] = series[0]
+                    closes, _vols, dates = series
+                    # Store (date, close) so the GUI can render calendar labels.
+                    closes_cache[sym] = list(zip(dates, closes))
                 row = self._scan_symbol(sym, lookback_days, bench_closes, series)
             except Exception as exc:  # per-symbol guardrail
                 print(f"{sym}: scan error: {exc!r}")
@@ -108,13 +111,13 @@ class DomainScanner:
             sym: str,
             lookback_days: int,
             bench_closes: Optional[List[float]],
-            series: Optional[Tuple[List[float], List[float]]] = None,
+            series: Optional[Tuple[List[float], List[float], List[str]]] = None,
     ) -> ScanResultRow:
         if series is None:
             print(f"{sym}: insufficient data (no usable bars)")
             return self._error_row(sym, "insufficient data")
 
-        closes, vols = series
+        closes, vols, _dates = series
         if len(closes) < 210:
             print(f"{sym}: insufficient data ({len(closes)} bars)")
             return self._error_row(sym, "insufficient data")
@@ -362,13 +365,14 @@ class DomainScanner:
     # Data fetch
     # -------------------------
 
-    def _safe_fetch_series(self, symbol: str, lookback_days: int) -> Optional[Tuple[List[float], List[float]]]:
+    def _safe_fetch_series(self, symbol: str, lookback_days: int) -> Optional[Tuple[List[float], List[float], List[str]]]:
         bars = self._data.get_daily_bars(symbol, lookback_days)
         if not bars:
             return None
 
         closes: List[float] = []
         vols: List[float] = []
+        dates: List[str] = []
 
         for b in bars:
             if b.close is None or b.close <= 0:
@@ -376,10 +380,12 @@ class DomainScanner:
             v = b.volume if (b.volume is not None and b.volume >= 0) else 0.0
             closes.append(float(b.close))
             vols.append(float(v))
+            # Use ISO date string for stable GUI formatting.
+            dates.append(b.d.isoformat())
 
-        if not closes or len(closes) != len(vols):
+        if not closes or len(closes) != len(vols) or len(closes) != len(dates):
             return None
-        return closes, vols
+        return closes, vols, dates
 
     # -------------------------
     # Liquidity scoring
@@ -541,7 +547,7 @@ def run_self_test(data_provider: MarketDataProvider, symbol: str, lookback_days:
     if closes_vols is None:
         raise RuntimeError(f"self-test: no data for {symbol}")
 
-    closes, _vols = closes_vols
+    closes, _vols, _dates = closes_vols
     chart = build_pf_from_closes(closes, box_mode="percent", box_value=0.015, reversal=3)
     if chart.columns and chart.current.col_type not in {"X", "O"}:
         raise RuntimeError(f"self-test: unexpected PFColumn col_type={chart.current.col_type!r}")
