@@ -1,3 +1,16 @@
-PySide6>=6.6
-yfinance>=0.2.40
-pandas>=2.0
+# Core numerical & data handling
+numpy>=1.24,<3.0
+pandas>=3.0
+scipy>=1.17.0
+
+# Data acquisition (used for market data)
+yfinance>=1.1.0
+
+# Date/time utilities
+python-dateutil>=2.8
+
+# Visualization (used only if charts are enabled)
+matplotlib>=3.7,<4.0
+
+# UI
+PyQt6>=6.10.2
